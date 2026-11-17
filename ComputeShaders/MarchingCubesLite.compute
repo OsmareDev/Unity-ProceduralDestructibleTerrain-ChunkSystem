@@ -1,0 +1,141 @@
+#pragma kernel MarchingCubesLite
+
+#include "/Includes/MarchingCubesConstants.compute"
+
+struct Vertex {
+	float3 position;
+	float3 normal;
+	int2 id;
+};
+
+struct Triangle {
+	Vertex vertexC;
+	Vertex vertexB;
+	Vertex vertexA;
+};
+
+uint chunkSize;
+uint resolution;
+StructuredBuffer<float> chunkValues;
+AppendStructuredBuffer<Triangle> outputTriangles;
+
+static const int xOffsets[8] = {0, 1, 1, 0, 0, 1, 1, 0};
+static const int yOffsets[8] = {0, 0, 0, 0, 1, 1, 1, 1};
+static const int zOffsets[8] = {0, 0, 1, 1, 0, 0, 1, 1};
+
+int GetIndex( int x, int y ) { 
+    return (y + 1) * (resolution + 2) + (x + 1);
+}
+
+int GetNodeId(int x, int y, int z) {
+    return x + y * resolution + z * resolution * resolution;
+}
+
+float SampleDensity(int x, int y, int z) {
+    return min(chunkValues[GetIndex(x, y)] - (float)(z), 1.0);
+    // return chunkValues[GetIndex(x, y)] - (float)(z);
+}
+
+void GetCornersPos( int x, int y, int z, out float3 corners[8] ) {
+
+    float step = (float)chunkSize / ((float)resolution);
+
+    float3 basePos = float3((float)x, (float)z, (float)y) * step;
+
+    corners[0] = basePos + float3(0,     0,     0);
+    corners[1] = basePos + float3(step,  0,     0);
+    corners[2] = basePos + float3(step,  step,  0);
+    corners[3] = basePos + float3(0,     step,  0);
+    corners[4] = basePos + float3(0,     0,     step);
+    corners[5] = basePos + float3(step,  0,     step);
+    corners[6] = basePos + float3(step,  step,  step);
+    corners[7] = basePos + float3(0,     step,  step);
+}
+
+float3 CalculateNormal( int3 pos ) {
+	return normalize(float3(
+        (SampleDensity(pos.x-1, pos.y, pos.z) - SampleDensity(pos.x+1, pos.y, pos.z))/2,
+        // (SampleDensity(pos.x, pos.y, pos.z-1) - SampleDensity(pos.x, pos.y, pos.z+1)) / 2,
+        1,
+        // SampleDensity(pos.x, pos.y, pos.z-1),
+        (SampleDensity(pos.x, pos.y-1, pos.z) - SampleDensity(pos.x, pos.y+1, pos.z))/2
+    ));
+}
+
+Vertex CreateVertex(float3 posA, float3 posB, int3 gridA, int3 gridB) {
+    Vertex vert = (Vertex)0;
+
+    float dA = SampleDensity(gridA.x, gridA.y, gridA.z); // 0.8
+    float dB = SampleDensity(gridB.x, gridB.y, gridB.z); // 0
+
+    float t = (0.0 - dA) / (dB - dA);
+    vert.position = posA + t * (posB - posA);
+
+    int nodeA = GetNodeId(gridA.x, gridA.y, gridA.z); // 0
+    int nodeB = GetNodeId(gridB.x, gridB.y, gridB.z); // 1
+
+    float3 normalA = CalculateNormal(gridA);
+	float3 normalB = CalculateNormal(gridB);
+    
+    vert.normal = normalize(normalA + t * (normalB - normalA));
+    vert.id = int2(min(nodeA, nodeB), max(nodeA, nodeB));
+    return vert;
+}
+
+[numthreads(8,8,8)]
+void MarchingCubesLite (uint3 id : SV_DispatchThreadID) {
+    if (id.x >= (resolution-1) || id.y >= (resolution-1) || id.z >= (resolution-1)) return;
+
+    float3 coords[8];
+    GetCornersPos(id.x, id.y, id.z, coords);
+
+    int cubeConfiguration = 0;
+    [unroll]
+    for ( int i = 0; i < 8; i++ ) {
+        int cx = id.x + xOffsets[i];
+        int cy = id.y + yOffsets[i];
+        int cz = id.z + zOffsets[i];
+
+        cubeConfiguration |= ((SampleDensity(cx, cy, cz) > 0) << i);
+    }
+
+    int edgeIndices[] = triTable[cubeConfiguration];
+
+    for ( i = 0; i < 16; i += 3 ) {
+        if (edgeIndices[i] == -1) break;
+
+        Triangle tri;
+
+        int edgeIndexA = edgeIndices[i];
+		int a0 = cornerIndexAFromEdge[edgeIndexA];
+		int a1 = cornerIndexBFromEdge[edgeIndexA];
+        tri.vertexC = CreateVertex(
+            coords[a0],
+            coords[a1],
+            int3(id.x + xOffsets[a0], id.y + yOffsets[a0], id.z + zOffsets[a0]),
+            int3(id.x + xOffsets[a1], id.y + yOffsets[a1], id.z + zOffsets[a1])
+        );
+
+		int edgeIndexB = edgeIndices[i+1];
+		int b0 = cornerIndexAFromEdge[edgeIndexB];
+		int b1 = cornerIndexBFromEdge[edgeIndexB];
+        tri.vertexB = CreateVertex(
+            coords[b0], 
+            coords[b1], 
+            int3(id.x + xOffsets[b0], id.y + yOffsets[b0], id.z + zOffsets[b0]),
+            int3(id.x + xOffsets[b1], id.y + yOffsets[b1], id.z + zOffsets[b1])
+        );
+
+		int edgeIndexC = edgeIndices[i+2];
+		int c0 = cornerIndexAFromEdge[edgeIndexC];
+		int c1 = cornerIndexBFromEdge[edgeIndexC];
+        tri.vertexA = CreateVertex(
+            coords[c0], 
+            coords[c1], 
+            int3(id.x + xOffsets[c0], id.y + yOffsets[c0], id.z + zOffsets[c0]),
+            int3(id.x + xOffsets[c1], id.y + yOffsets[c1], id.z + zOffsets[c1])
+        );
+
+        outputTriangles.Append(tri); 
+    }
+}
