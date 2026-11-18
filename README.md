@@ -4,6 +4,8 @@ Este código ha sido extraído del proyecto en curso de Burning Again, un proyec
 
 [![IMAGE ALT TEXT](https://img.youtube.com/vi/7K-KL-ZU7q8/0.jpg)](https://www.youtube.com/watch?v=7K-KL-ZU7q8 "BURNING AGAIN")
 
+<img width="1086" height="608" alt="ChunksLiteBurst" src="https://github.com/user-attachments/assets/4166a056-e356-4ab0-a783-245b99437f36" />
+
 En este código se tratan los siguientes temas:
 
 ## Mapas de ruido
